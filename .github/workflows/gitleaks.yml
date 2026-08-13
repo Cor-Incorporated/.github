@@ -1,0 +1,49 @@
+name: secret scan (gitleaks)
+
+on:
+  workflow_call:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 0 1 * *'
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks を取得する
+        run: |
+          set -eu
+          URL=$(curl -sS https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+                | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
+          curl -sSL "$URL" | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks version
+
+      - name: 検査する
+        run: |
+          set -eu
+          if [ -f .gitleaks.toml ]; then
+            echo "リポジトリ固有の設定を使用します"
+            gitleaks git . --redact --config .gitleaks.toml \
+              --report-format sarif --report-path gitleaks.sarif --exit-code 1
+          else
+            echo "設定ファイルがないため既定ルールで検査します"
+            gitleaks git . --redact \
+              --report-format sarif --report-path gitleaks.sarif --exit-code 1
+          fi
+
+      - name: 結果を保存する
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report-${{ github.run_number }}
+          path: gitleaks.sarif
+          retention-days: 90

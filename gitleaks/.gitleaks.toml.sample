@@ -1,0 +1,71 @@
+title = "Cor. ISMS secret scan"
+
+[extend]
+useDefault = true
+
+# --- 1. 行の内容で除外する（値ではないもの）---
+[[allowlists]]
+description = "変数名・環境変数参照・Secret Manager参照・コメント行"
+regexTarget = "line"
+regexes = [
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',
+  '''\$[A-Z_][A-Z0-9_]{2,}''',
+  '''process\.env\.[A-Z_][A-Z0-9_]*''',
+  '''os\.environ''',
+  '''^\s*(ARG|ENV)\s+[A-Z_][A-Z0-9_]*\s*$''',
+  '''secretmanager\.googleapis\.com''',
+  '''projects/[^/]+/secrets/[^/]+''',
+  '''secretKeyRef''',
+  '''^\s*<[a-zA-Z/]''',
+  '''pattern\s*=\s*"''',
+  '''\[a-zA-Z0-9''',
+  '''^\s*(ARG|ENV)\s+[A-Z_][A-Z0-9_]*(=.*)?$''',
+  '''^\s*env:\s*[A-Z_]''',
+  '''pkg\.dev/''',
+  '''(?i)image\s*(tag)?\s*[:=]''',
+  '''sha256:''',
+  '''"[a-z_]*(id|hash|digest|sha|ref|tag)"\s*:''',
+  '''^\s*[A-Z][A-Z0-9_]{3,}\s*$''',
+  '''^\s*(#|//|--)\s*[^\x00-\x7F]''',
+  '''(?i)(your|my)[-_]?(api[-_]?key|secret|token|password)''',
+  '''(?i)x{6,}''',
+  '''(?i)(placeholder|changeme|dummy|sample|example)''',
+]
+
+# --- 2. ファイルで除外する ---
+[[allowlists]]
+description = "雛形・ロックファイル・外部取り込み"
+paths = [
+  '''\.env\.example$''',
+  '''\.env\.sample$''',
+  '''terraform\.tfvars\.example$''',
+  '''package-lock\.json$''',
+  '''pnpm-lock\.yaml$''',
+  '''yarn\.lock$''',
+  '''go\.sum$''',
+  '''(^|/)node_modules/''',
+  '''(^|/)vendor/''',
+]
+
+# --- 3. テストコード・フィクスチャ ---
+# テストに本物らしいダミー値が入るのは正常。ただし docs/ と test_reports/ は
+# 対象に残す（実データが写り込む場所のため）。
+[[allowlists]]
+description = "テストコード・テストフィクスチャ"
+paths = [
+  '''_test\.go$''',
+  '''\.test\.(ts|tsx|js|jsx|mjs|cjs)$''',
+  '''\.spec\.(ts|tsx|js|jsx|mjs|cjs)$''',
+  '''(^|/)__tests__/''',
+  '''(^|/)tests?/''',
+  '''(^|/)test_[^/]+\.py$''',
+  '''(^|/)fixtures?/''',
+]
+
+# --- 4. 検出値そのもので除外する ---
+[[allowlists]]
+description = "明らかなダミー値"
+stopwords = [
+  "example", "sample", "dummy", "placeholder", "changeme",
+  "xxxxxxxx", "testdata", "test_data", "localhost", "127.0.0.1",
+]
