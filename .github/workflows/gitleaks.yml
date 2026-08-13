@@ -21,10 +21,13 @@ jobs:
       - name: gitleaks を取得する
         run: |
           set -eu
+          # リポジトリ内に gitleaks/ ディレクトリが存在するため、tar での
+          # 直接展開は同名衝突する。stdout 出力（-O）で回避する。
           URL=$(curl -sS https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
                 | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
-          curl -sSL "$URL" | tar -xz gitleaks
-          sudo mv gitleaks /usr/local/bin/
+          curl -sSL "$URL" | tar -xzO gitleaks > /tmp/gitleaks-bin
+          sudo mv /tmp/gitleaks-bin /usr/local/bin/gitleaks
+          sudo chmod +x /usr/local/bin/gitleaks
           gitleaks version
 
       - name: 検査する
