@@ -49,3 +49,19 @@ gitleaksをchecksum検証後に導入するため、全ケースを実行しま�
 ```bash
 .github/tests/gitleaks-workflow-scenarios.sh
 ```
+
+## `.github`リポジトリの変更管理
+
+このリポジトリのdefault branchには、次の追加ルールを適用します。
+
+- `terisuke`本人のPRはIssue・自己承認なしでmergeできる
+- 他メンバーは、先に同一リポジトリのIssueを作成し、PR本文へ
+  `Closes #123`の形式で関連付ける
+- 他メンバーのPRは、全ファイルのCODEOWNERである`@terisuke`の承認が必要
+- 承認後にcommitが追加された場合、古い承認は無効にする
+- 上記の例外はシークレット検査rulesetには適用しない
+
+Issueリンクはbase branch上の`pull_request_target` workflowで検査し、PRのcodeを
+checkout・実行しません。設定payloadは`.github/rulesets/`に保存し、repository
+rulesetのlive設定と照合します。このポリシーは`Cor-Incorporated/.github`だけが
+対象で、他の組織リポジトリには適用しません。

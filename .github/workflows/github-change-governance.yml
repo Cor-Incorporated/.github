@@ -1,0 +1,97 @@
+name: .github change governance
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  issue-governance:
+    name: issue-governance
+    runs-on: ubuntu-latest
+    steps:
+      - name: 変更管理を検査する
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          GRAPHQL_URL: ${{ github.graphql_url }}
+          POLICY_OWNER: terisuke
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = merge_group ]; then
+            echo "PRで検証済みのmerge groupを許可します"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" != pull_request_target ]; then
+            echo "::error::未対応のイベントです: ${EVENT_NAME}"
+            exit 2
+          fi
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*)
+              echo "::error::PR番号を取得できません"
+              exit 2
+              ;;
+          esac
+
+          repo_owner="${REPOSITORY%%/*}"
+          repo_name="${REPOSITORY#*/}"
+          query='query($owner:String!, $name:String!, $number:Int!) {
+            repository(owner:$owner, name:$name) {
+              pullRequest(number:$number) {
+                author { login }
+                closingIssuesReferences(first:100) {
+                  nodes { number repository { nameWithOwner } }
+                }
+              }
+            }
+          }'
+          payload="$(jq -n \
+            --arg query "$query" \
+            --arg owner "$repo_owner" \
+            --arg name "$repo_name" \
+            --argjson number "$PR_NUMBER" \
+            '{query:$query, variables:{owner:$owner, name:$name, number:$number}}')"
+          response="$(curl -fsS \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            --data "$payload" \
+            "$GRAPHQL_URL")"
+
+          if [ "$(jq '.errors // [] | length' <<<"$response")" -gt 0 ]; then
+            jq -r '.errors[] | "::error::GraphQL: \(.message)"' <<<"$response"
+            exit 2
+          fi
+
+          pr="$(jq -c '.data.repository.pullRequest // empty' <<<"$response")"
+          if [ -z "$pr" ]; then
+            echo "::error::PR情報を取得できません"
+            exit 2
+          fi
+
+          author="$(jq -r '.author.login // empty | ascii_downcase' <<<"$pr")"
+          policy_owner="$(printf '%s' "$POLICY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          if [ "$author" = "$policy_owner" ]; then
+            echo "${POLICY_OWNER}本人のPRのためIssueリンクは任意です"
+            exit 0
+          fi
+
+          linked_issue_count="$(jq --arg repository "$REPOSITORY" \
+            '[.closingIssuesReferences.nodes[]? |
+              select(.repository.nameWithOwner == $repository)] | length' <<<"$pr")"
+          if [ "$linked_issue_count" -gt 0 ]; then
+            echo "同一リポジトリのIssueリンクを確認しました"
+            exit 0
+          fi
+
+          echo "::error::他メンバーのPRには同一リポジトリのIssueが必要です。PR本文に Closes #123 を記載してください。"
+          exit 1
