@@ -1,0 +1,21 @@
+name: .github change governance tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ガバナンスシナリオを検査する
+        run: |
+          shellcheck .github/tests/github-change-governance-scenarios.sh
+          jq empty .github/rulesets/github-change-approval.json
+          jq empty .github/rulesets/github-issue-gate.json
+          .github/tests/github-change-governance-scenarios.sh
