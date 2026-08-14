@@ -65,3 +65,28 @@ Issueリンクはbase branch上の`pull_request_target` workflowで検査し、P
 checkout・実行しません。設定payloadは`.github/rulesets/`に保存し、repository
 rulesetのlive設定と照合します。このポリシーは`Cor-Incorporated/.github`だけが
 対象で、他の組織リポジトリには適用しません。
+
+## 新規リポジトリの作成
+
+組織の必須workflow rulesetは、default branchの作成時だけ検査を免除します。
+作成後の更新とPRでは、従来どおりgitleaks workflowの成功が必要です。この例外が
+無効だと、最初のcommitにworkflow結果が存在しないため、空リポジトリのmainを
+作成できません。
+
+live設定の確認は通常の`repo` scopeで実行できます。
+
+```bash
+.github/scripts/repair-secret-scan-ruleset.sh --check
+```
+
+修復にはorganization administrationの書き込み権限が必要です。スクリプトは現在の
+rules配列を読み取り、`workflows.parameters.do_not_enforce_on_create`だけを`true`へ
+変更し、readbackで反映を確認します。
+
+```bash
+gh auth refresh -h github.com -s admin:org
+.github/scripts/repair-secret-scan-ruleset.sh --apply
+```
+
+`.github/tests/secret-scan-ruleset-scenarios.sh`は、誤設定の検出、既存PRルールを
+保持した修復、正常設定の受理を検証します。
