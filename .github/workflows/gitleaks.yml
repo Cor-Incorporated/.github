@@ -1,14 +1,17 @@
 name: secret scan (gitleaks)
 
 on:
-  workflow_call:
   push:
   pull_request:
+  merge_group:
   schedule:
     - cron: '0 0 1 * *'
 
 permissions:
   contents: read
+
+env:
+  GITLEAKS_VERSION: 8.30.1
 
 jobs:
   gitleaks:
@@ -20,43 +23,102 @@ jobs:
 
       - name: gitleaks を取得する
         run: |
-          set -eu
-          # リポジトリ内に gitleaks/ ディレクトリが存在するため、tar での
-          # 直接展開は同名衝突する。stdout 出力（-O）で回避する。
-          URL=$(curl -sS https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
-                | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
-          curl -sSL "$URL" | tar -xzO gitleaks > /tmp/gitleaks-bin
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          checksums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          release_url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+
+          # バージョンと公式checksumを固定し、リリース更新による検出結果の
+          # 突然の変化と、未検証バイナリの実行を避ける。
+          curl -fsSLO "${release_url}/${asset}"
+          curl -fsSLO "${release_url}/${checksums}"
+          grep -F "  ${asset}" "$checksums" | sha256sum --check -
+
+          # 対象リポジトリに gitleaks/ ディレクトリがあっても衝突しないよう、
+          # バイナリだけをstdoutへ展開する。
+          tar -xzOf "$asset" gitleaks > /tmp/gitleaks-bin
           sudo mv /tmp/gitleaks-bin /usr/local/bin/gitleaks
           sudo chmod +x /usr/local/bin/gitleaks
           gitleaks version
 
       - name: 検査する
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.merge_group.base_ref || github.event.repository.default_branch }}
+          BEFORE_SHA: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          set -eu
+          set -euo pipefail
+
+          is_commit() {
+            [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null
+          }
+
+          resolve_base_sha() {
+            local candidate="${1:-}"
+            local base_ref="${BASE_REF:-${DEFAULT_BRANCH:-}}"
+            local remote_ref
+
+            if [ -n "$candidate" ] && ! is_commit "$candidate"; then
+              git fetch --no-tags origin "$candidate" >/dev/null 2>&1 || true
+            fi
+            if is_commit "$candidate"; then
+              printf '%s\n' "$candidate"
+              return 0
+            fi
+
+            if [ -z "$base_ref" ]; then
+              return 1
+            fi
+
+            remote_ref="refs/remotes/origin/${base_ref}"
+            if ! is_commit "$remote_ref"; then
+              git fetch --no-tags origin \
+                "+refs/heads/${base_ref}:${remote_ref}" >/dev/null
+            fi
+            git merge-base "$remote_ref" HEAD
+          }
+
           # スキャン範囲をイベント種別で切り替える:
-          #   pull_request → ベース(main)との差分のみ（既存の履歴リーク・テストフィクスチャを誤検出しない）
-          #   push         → 直前コミットとの差分
-          #   schedule     → 月次フルスキャン（定期監査）
+          #   pull_request / merge_group → 対象baseとの差分のみ
+          #   push                      → push前SHAとの差分
+          #   schedule                  → 監査目的のフルスキャン
           SCAN_ARGS=()
           case "${GITHUB_EVENT_NAME}" in
-            pull_request)
-              BASE_SHA="${GITHUB_EVENT_PULL_REQUEST_BASE_SHA:-}"
-              if [ -z "$BASE_SHA" ]; then
-                BASE_SHA="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+            pull_request|merge_group)
+              if ! resolved_base_sha="$(resolve_base_sha "${BASE_SHA:-}")"; then
+                echo "::error::PRのbase SHAを解決できません。全履歴スキャンには退避しません。"
+                exit 2
               fi
-              if [ -n "$BASE_SHA" ]; then
-                SCAN_ARGS=(--log-opts="${BASE_SHA}..HEAD")
-                echo "PR 差分をスキャンします: ${BASE_SHA}..HEAD"
-              fi
+              SCAN_ARGS=(--log-opts="${resolved_base_sha}..HEAD")
+              echo "PR 差分をスキャンします: ${resolved_base_sha}..HEAD"
               ;;
             push)
-              if git rev-parse HEAD^ >/dev/null 2>&1; then
-                SCAN_ARGS=(--log-opts="HEAD^..HEAD")
-                echo "直前コミットの差分をスキャンします: HEAD^..HEAD"
+              zero_sha=0000000000000000000000000000000000000000
+              push_base_sha="${BEFORE_SHA:-}"
+              if [ -z "$push_base_sha" ] || [ "$push_base_sha" = "$zero_sha" ]; then
+                push_base_sha="$(resolve_base_sha '' || true)"
+              elif ! is_commit "$push_base_sha"; then
+                git fetch --no-tags origin "$push_base_sha" >/dev/null 2>&1 || true
+                if ! is_commit "$push_base_sha"; then
+                  push_base_sha="$(resolve_base_sha '' || true)"
+                fi
+              fi
+
+              if is_commit "$push_base_sha"; then
+                SCAN_ARGS=(--log-opts="${push_base_sha}..HEAD")
+                echo "push 差分をスキャンします: ${push_base_sha}..HEAD"
+              else
+                echo "::error::push前のSHAを解決できません。全履歴スキャンには退避しません。"
+                exit 2
               fi
               ;;
+            schedule)
+              echo "リポジトリ全体をスキャンします（月次監査）"
+              ;;
             *)
-              echo "リポジトリ全体をスキャンします（schedule / workflow_call）"
+              echo "::error::未対応のイベントです: ${GITHUB_EVENT_NAME}"
+              exit 2
               ;;
           esac
 
