@@ -1,0 +1,37 @@
+name: gitleaks guardrail scenarios
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: 8.30.1
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: gitleaks を取得する
+        run: |
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          checksums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          release_url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSLO "${release_url}/${asset}"
+          curl -fsSLO "${release_url}/${checksums}"
+          grep -F "  ${asset}" "$checksums" | sha256sum --check -
+          tar -xzOf "$asset" gitleaks > /tmp/gitleaks-bin
+          sudo install -m 0755 /tmp/gitleaks-bin /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: シナリオテストを実行する
+        run: |
+          shellcheck .github/tests/gitleaks-workflow-scenarios.sh
+          .github/tests/gitleaks-workflow-scenarios.sh
